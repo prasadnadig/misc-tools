@@ -159,7 +159,7 @@ Use this to capture:
 Run:
 
 ```bash
-./conda-node-bootstrap.sh --mode setup
+./conda-node-bootstrap.sh --install-conda
 ```
 
 This should be done only after host GPU runtime setup is healthy.
@@ -169,7 +169,7 @@ This should be done only after host GPU runtime setup is healthy.
 Run:
 
 ```bash
-./conda-node-bootstrap.sh --mode verify
+./conda-node-bootstrap.sh --verify
 ```
 
 ## Conservative Variation: Exact Driver Version Pinning
@@ -220,8 +220,8 @@ sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
 sudo ./gpu-node-bootstrap.sh --mode verify
 sudo ./gpu-node-bootstrap.sh --summarize-installation
-./conda-node-bootstrap.sh --mode setup
-./conda-node-bootstrap.sh --mode verify
+./conda-node-bootstrap.sh --install-conda
+./conda-node-bootstrap.sh --verify
 ```
 
 ## setup-all Variant
@@ -232,6 +232,6 @@ sudo reboot
 
 # after reconnecting
 sudo ./gpu-node-bootstrap.sh --setup-all
-./conda-node-bootstrap.sh --mode setup
-./conda-node-bootstrap.sh --mode verify
+./conda-node-bootstrap.sh --install-conda
+./conda-node-bootstrap.sh --verify
 ```

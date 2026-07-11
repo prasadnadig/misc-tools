@@ -189,7 +189,8 @@ Installs/configures:
 - Base environment Python version target: `3.12` (default, configurable)
 - Base env packages: `jupyterlab`, `nb_conda_kernels`
 - Conda default package policy: auto-install `ipykernel` in all newly created envs
-- User shell exports for Conda and CUDA runtime paths in `~/.bashrc`
+- User shell exports for Conda in `~/.bashrc`
+- Optional managed CUDA shell env update in `~/.bashrc` via explicit flag
 
 Not installed:
 - No framework-specific Conda envs are created in this stage
@@ -199,20 +200,27 @@ Design notes:
 - Supports idempotent re-runs and safe append behavior in `~/.bashrc`
 - Supports diagnostic/check modes and runbook generation
 
-CLI modes/options:
-- `--mode setup|verify|runbook` (default: `setup`)
+CLI actions/options:
+- `--install-conda`
+- `--verify`
+- `--runbook`
 - `--summarize-installation`
 - `--miniforge-dir <path>`
 - `--python-version <version>` (default: `3.12`)
 - `--installer-url <url>`
-- `--cuda-home <path>`
+- `--runbook-out <path>`
+- `--update-cuda-paths-in-env [path]` (uses provided path, otherwise `CUDA_HOME` env)
+- no action prints help
 
 Examples:
 ```bash
-./conda-node-bootstrap.sh --mode setup
-./conda-node-bootstrap.sh --mode verify
+./conda-node-bootstrap.sh --install-conda
+./conda-node-bootstrap.sh --verify
+./conda-node-bootstrap.sh --runbook
 ./conda-node-bootstrap.sh --summarize-installation
 ./conda-node-bootstrap.sh --python-version 3.12
+./conda-node-bootstrap.sh --update-cuda-paths-in-env /usr/local/cuda-12.8
+CUDA_HOME=/usr/local/cuda-12.8 ./conda-node-bootstrap.sh --update-cuda-paths-in-env
 ```
 
 ## Suggested execution order
@@ -235,7 +243,7 @@ sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
 
 2. Run Conda setup as target user:
 ```bash
-./conda-node-bootstrap.sh --mode setup
+./conda-node-bootstrap.sh --install-conda
 ```
 
 3. Run summary outputs for quick audit:
@@ -272,6 +280,7 @@ Host-level script writes:
 
 User-level script appends to `~/.bashrc`:
 - `export PATH="$HOME/local/miniforge3/bin:$PATH"`
-- `export CUDA_HOME=/usr/local/cuda-12.8`
-- `export PATH="$CUDA_HOME/bin:$PATH"`
-- `export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"`
+
+Optional CUDA env update (managed block in `~/.bashrc`):
+- `./conda-node-bootstrap.sh --update-cuda-paths-in-env /usr/local/cuda-12.8`
+- `CUDA_HOME=/usr/local/cuda-12.8 ./conda-node-bootstrap.sh --update-cuda-paths-in-env`

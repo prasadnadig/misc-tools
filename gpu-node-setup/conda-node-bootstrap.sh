@@ -12,47 +12,61 @@ set -euo pipefail
 # - Python in base env: consistent baseline interpreter for tooling.
 # - jupyterlab + nb_conda_kernels in base: notebook UX and env kernel discovery.
 # - create_default_packages ipykernel: every newly created env automatically gets ipykernel.
-# - PATH/LD_LIBRARY_PATH exports: predictable CUDA and Conda command discovery.
+# - Optional CUDA env update: adds CUDA paths safely without duplicate PATH/LD_LIBRARY_PATH entries.
 #
-# Modes:
-#   setup    -> install/configure (default)
-#   verify   -> run diagnostics
-#   runbook  -> emit concise markdown runbook
+# Actions:
+#   --install-conda -> install/configure Conda + base notebook tooling
+#   --verify        -> run diagnostics
+#   --runbook       -> emit concise markdown runbook
+#   (no action)     -> print help
 #
 # Extra option:
 #   --summarize-installation -> print installed versions/details (standalone or after setup)
+#   --update-cuda-paths-in-env [CUDA_PATH] -> update ~/.bashrc CUDA block (path arg or CUDA_HOME env)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MODE="setup"
 RUNBOOK_OUT="$SCRIPT_DIR/conda-node-bootstrap-runbook.md"
 MINIFORGE_DIR="$HOME/local/miniforge3"
 PYTHON_VERSION="3.12"
 MINIFORGE_INSTALLER_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
-CUDA_HOME="/usr/local/cuda-12.8"
 SUMMARIZE_ONLY=0
+UPDATE_CUDA_ENV=0
+CUDA_PATH_ARG=""
+INSTALL_CONDA_ONLY=0
+VERIFY_ONLY=0
+RUNBOOK_ONLY=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./conda-node-bootstrap.sh [--mode setup|verify|runbook] [options]
+  ./conda-node-bootstrap.sh [--install-conda|--verify|--runbook] [options]
   ./conda-node-bootstrap.sh --summarize-installation
+  ./conda-node-bootstrap.sh --help
 
 Options:
-  --mode <mode>                 setup (default), verify, runbook
+  --install-conda               Install/configure Miniforge + base env tooling
+  --verify                      Run diagnostics for existing installation
+  --runbook                     Generate concise markdown runbook
   --miniforge-dir <path>        Miniforge install path (default: ~/local/miniforge3)
   --python-version <version>    Python version for base env (default: 3.12)
   --installer-url <url>         Miniforge installer URL
-  --cuda-home <path>            CUDA_HOME used in shell exports (default: /usr/local/cuda-12.8)
+  --update-cuda-paths-in-env [path]
+                                Update CUDA-related shell exports in ~/.bashrc.
+                                Uses provided path, otherwise falls back to CUDA_HOME env.
   --runbook-out <path>          Output path for runbook mode
   --summarize-installation      Print key versions/details and exit
   -h, --help                    Show this help
 
 Examples:
-  ./conda-node-bootstrap.sh
-  ./conda-node-bootstrap.sh --mode verify
+  ./conda-node-bootstrap.sh --install-conda
+  ./conda-node-bootstrap.sh --verify
+  ./conda-node-bootstrap.sh --runbook
   ./conda-node-bootstrap.sh --python-version 3.12
+  ./conda-node-bootstrap.sh --update-cuda-paths-in-env /usr/local/cuda-12.8
+  CUDA_HOME=/usr/local/cuda-12.8 ./conda-node-bootstrap.sh --update-cuda-paths-in-env
   ./conda-node-bootstrap.sh --summarize-installation
+  ./conda-node-bootstrap.sh --help
 EOF
 }
 
@@ -82,6 +96,156 @@ ensure_shell_line() {
   if ! grep -Fqx "$line" "$file"; then
     echo "$line" >> "$file"
   fi
+}
+
+replace_managed_block() {
+  local file="$1"
+  local start_marker="$2"
+  local end_marker="$3"
+  local block_content="$4"
+  local tmp
+  tmp="$(mktemp)"
+
+  touch "$file"
+  awk -v start="$start_marker" -v end="$end_marker" '
+    BEGIN { skip=0 }
+    {
+      if (index($0, start) == 1) { skip=1; next }
+      if (skip && index($0, end) == 1) { skip=0; next }
+      if (!skip) print
+    }
+  ' "$file" > "$tmp"
+
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+
+  {
+    echo
+    echo "$block_content"
+  } >> "$file"
+}
+
+dedupe_colon_list() {
+  local input="$1"
+  local output=""
+  local part
+  local -A seen=()
+
+  IFS=':' read -r -a parts <<< "$input"
+  for part in "${parts[@]}"; do
+    [[ -z "$part" ]] && continue
+    if [[ -z "${seen[$part]+x}" ]]; then
+      seen[$part]=1
+      if [[ -z "$output" ]]; then
+        output="$part"
+      else
+        output="$output:$part"
+      fi
+    fi
+  done
+
+  echo "$output"
+}
+
+remove_paths_from_colon_list() {
+  local input="$1"
+  shift
+  local output=""
+  local part
+  local drop
+  local keep
+
+  IFS=':' read -r -a parts <<< "$input"
+  for part in "${parts[@]}"; do
+    [[ -z "$part" ]] && continue
+    keep=1
+    for drop in "$@"; do
+      if [[ -n "$drop" && "$part" == "$drop" ]]; then
+        keep=0
+        break
+      fi
+    done
+
+    if [[ "$keep" -eq 1 ]]; then
+      if [[ -z "$output" ]]; then
+        output="$part"
+      else
+        output="$output:$part"
+      fi
+    fi
+  done
+
+  echo "$output"
+}
+
+build_cuda_env_values() {
+  local cuda_home="$1"
+  local current_path="$2"
+  local current_ld="$3"
+  local cuda_bin="$cuda_home/bin"
+  local cuda_lib64="$cuda_home/lib64"
+  local cuda_targets="$cuda_home/targets/x86_64-linux/lib"
+  local cleaned_path
+  local cleaned_ld
+  local next_path
+  local next_ld
+
+  cleaned_path="$(remove_paths_from_colon_list "$current_path" "$cuda_bin")"
+  cleaned_ld="$(remove_paths_from_colon_list "$current_ld" "$cuda_lib64" "$cuda_targets")"
+
+  next_path="$cuda_bin"
+  if [[ -n "$cleaned_path" ]]; then
+    next_path="$next_path:$cleaned_path"
+  fi
+
+  next_ld="$cuda_lib64:$cuda_targets"
+  if [[ -n "$cleaned_ld" ]]; then
+    next_ld="$next_ld:$cleaned_ld"
+  fi
+
+  CUDA_NEXT_PATH="$(dedupe_colon_list "$next_path")"
+  CUDA_NEXT_LD_LIBRARY_PATH="$(dedupe_colon_list "$next_ld")"
+}
+
+update_cuda_paths_in_env() {
+  local requested_path="$1"
+  local cuda_home_resolved="$requested_path"
+  local bashrc="$HOME/.bashrc"
+  local start_marker="# >>> conda-node-bootstrap cuda paths >>>"
+  local end_marker="# <<< conda-node-bootstrap cuda paths <<<"
+  local block
+
+  if [[ -z "$cuda_home_resolved" ]]; then
+    cuda_home_resolved="${CUDA_HOME:-}"
+  fi
+
+  if [[ -z "$cuda_home_resolved" ]]; then
+    echo "ERROR: CUDA path not provided. Use --update-cuda-paths-in-env <path> or set CUDA_HOME." >&2
+    exit 1
+  fi
+
+  if [[ ! -d "$cuda_home_resolved" ]]; then
+    echo "ERROR: CUDA path does not exist: $cuda_home_resolved" >&2
+    exit 1
+  fi
+
+  build_cuda_env_values "$cuda_home_resolved" "${PATH:-}" "${LD_LIBRARY_PATH:-}"
+
+  export CUDA_HOME="$cuda_home_resolved"
+  export PATH="$CUDA_NEXT_PATH"
+  export LD_LIBRARY_PATH="$CUDA_NEXT_LD_LIBRARY_PATH"
+
+  block=$(cat <<EOF
+$start_marker
+export CUDA_HOME="$cuda_home_resolved"
+export PATH="$CUDA_NEXT_PATH"
+export LD_LIBRARY_PATH="$CUDA_NEXT_LD_LIBRARY_PATH"
+$end_marker
+EOF
+)
+
+  replace_managed_block "$bashrc" "$start_marker" "$end_marker" "$block"
+  log "Updated CUDA env paths in $bashrc using CUDA_HOME=$cuda_home_resolved"
 }
 
 install_miniforge() {
@@ -134,9 +298,6 @@ configure_base_env() {
 write_user_exports() {
   local bashrc="$HOME/.bashrc"
   ensure_shell_line "export PATH=\"$MINIFORGE_DIR/bin:\$PATH\"" "$bashrc"
-  ensure_shell_line "export CUDA_HOME=$CUDA_HOME" "$bashrc"
-  ensure_shell_line "export PATH=\"\$CUDA_HOME/bin:\$PATH\"" "$bashrc"
-  ensure_shell_line "export LD_LIBRARY_PATH=\"\$CUDA_HOME/lib64:\$CUDA_HOME/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH\"" "$bashrc"
 
   # Make sure login shells load conda setup as well.
   "$MINIFORGE_DIR/bin/conda" init bash >/dev/null 2>&1 || true
@@ -151,7 +312,7 @@ do_setup() {
   configure_base_env
   write_user_exports
 
-  log "Setup complete. Running verification checks"
+  log "Install complete. Running verification checks"
   do_verify
 }
 
@@ -177,7 +338,7 @@ do_verify() {
 
   log "Shell path checks"
   which conda || true
-  echo "CUDA_HOME=${CUDA_HOME}"
+  echo "CUDA_HOME=${CUDA_HOME:-<not set>}"
 
   summarize_installation
 }
@@ -192,7 +353,7 @@ summarize_installation() {
   echo "User                         : $(id -un)"
   echo "Miniforge dir                : $MINIFORGE_DIR"
   echo "Base python target version   : $PYTHON_VERSION"
-  echo "CUDA_HOME target             : $CUDA_HOME"
+  echo "CUDA_HOME env                : ${CUDA_HOME:-<not set>}"
   echo
 
   if [[ -x "$MINIFORGE_DIR/bin/conda" ]]; then
@@ -207,7 +368,7 @@ summarize_installation() {
 
   echo
   echo "Key shell exports found in ~/.bashrc:"
-  grep -nE 'miniforge3/bin|CUDA_HOME|LD_LIBRARY_PATH' "$HOME/.bashrc" || true
+  grep -nE 'miniforge3/bin|conda-node-bootstrap cuda paths|CUDA_HOME|LD_LIBRARY_PATH' "$HOME/.bashrc" || true
   echo "============================================================"
 }
 
@@ -218,13 +379,13 @@ do_runbook() {
 ## 1) Run user bootstrap (NOT root)
 
 \`\`\`bash
-./conda-node-bootstrap.sh --mode setup
+./conda-node-bootstrap.sh --install-conda
 \`\`\`
 
 ## 2) Verify Conda + notebook tooling
 
 \`\`\`bash
-./conda-node-bootstrap.sh --mode verify
+./conda-node-bootstrap.sh --verify
 \`\`\`
 
 ## 3) Print installed versions/details
@@ -248,10 +409,18 @@ This script appends to ~/.bashrc:
 
 \`\`\`bash
 export PATH="$HOME/local/miniforge3/bin:$PATH"
-export CUDA_HOME=/usr/local/cuda-12.8
-export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 \`\`\`
+
+## 6) Optional CUDA shell export update (separate step)
+
+Use one of:
+
+\`\`\`bash
+./conda-node-bootstrap.sh --update-cuda-paths-in-env /usr/local/cuda-12.8
+CUDA_HOME=/usr/local/cuda-12.8 ./conda-node-bootstrap.sh --update-cuda-paths-in-env
+\`\`\`
+
+This writes a managed CUDA block in ~/.bashrc and sanitizes values to avoid duplicated entries.
 
 It also configures Conda to auto-install ipykernel for all future environments:
 
@@ -265,9 +434,17 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --mode)
-      MODE="$2"
-      shift 2
+    --install-conda)
+      INSTALL_CONDA_ONLY=1
+      shift
+      ;;
+    --verify)
+      VERIFY_ONLY=1
+      shift
+      ;;
+    --runbook)
+      RUNBOOK_ONLY=1
+      shift
       ;;
     --miniforge-dir)
       MINIFORGE_DIR="$2"
@@ -281,9 +458,14 @@ while [[ $# -gt 0 ]]; do
       MINIFORGE_INSTALLER_URL="$2"
       shift 2
       ;;
-    --cuda-home)
-      CUDA_HOME="$2"
-      shift 2
+    --update-cuda-paths-in-env)
+      UPDATE_CUDA_ENV=1
+      if [[ $# -gt 1 && "${2:-}" != --* ]]; then
+        CUDA_PATH_ARG="$2"
+        shift 2
+      else
+        shift
+      fi
       ;;
     --runbook-out)
       RUNBOOK_OUT="$2"
@@ -310,19 +492,28 @@ if [[ "$SUMMARIZE_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-case "$MODE" in
-  setup)
-    do_setup
-    ;;
-  verify)
-    do_verify
-    ;;
-  runbook)
-    do_runbook
-    ;;
-  *)
-    echo "Invalid mode: $MODE" >&2
-    usage
-    exit 1
-    ;;
-esac
+if [[ "$UPDATE_CUDA_ENV" -eq 1 ]]; then
+  require_non_root
+  update_cuda_paths_in_env "$CUDA_PATH_ARG"
+fi
+
+action_count=$((INSTALL_CONDA_ONLY + VERIFY_ONLY + RUNBOOK_ONLY))
+if [[ "$action_count" -gt 1 ]]; then
+  echo "ERROR: choose only one action: --install-conda, --verify, or --runbook" >&2
+  usage
+  exit 1
+fi
+
+# Default behavior: with no action and no standalone operation, print help.
+if [[ "$action_count" -eq 0 && "$UPDATE_CUDA_ENV" -eq 0 ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$INSTALL_CONDA_ONLY" -eq 1 ]]; then
+  do_setup
+elif [[ "$VERIFY_ONLY" -eq 1 ]]; then
+  do_verify
+elif [[ "$RUNBOOK_ONLY" -eq 1 ]]; then
+  do_runbook
+fi
