@@ -94,7 +94,7 @@ Options:
   --summarize-installation                      Print key versions/details and exit
   -h, --help                                   Show this help
 
-Examples:
+Examples (all options reference):
   sudo ./gpu-node-bootstrap.sh --setup-all
   sudo ./gpu-node-bootstrap.sh --install-base-packages
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
@@ -106,6 +106,17 @@ Examples:
   sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
   sudo ./gpu-node-bootstrap.sh --mode verify
   sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
+  sudo ./gpu-node-bootstrap.sh --summarize-installation
+
+Examples (golden path):
+  sudo ./gpu-node-bootstrap.sh --install-base-packages
+  sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
+  sudo reboot
+  # after reboot
+  sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
+  # optional host CUDA toolkit/runtime
+  sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
+  sudo ./gpu-node-bootstrap.sh --mode verify
   sudo ./gpu-node-bootstrap.sh --summarize-installation
 EOF
 
