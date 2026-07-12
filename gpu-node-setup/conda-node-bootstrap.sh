@@ -299,9 +299,11 @@ configure_base_env() {
   # Keep base Python pinned to caller-requested version for consistent tooling.
   conda install -n base -y "python=$PYTHON_VERSION"
 
-  # Notebook UX in base env and env kernel discovery in JupyterLab.
-  conda run -n base python -m pip install --upgrade pip
-  conda run -n base python -m pip install jupyterlab nb_conda_kernels
+  # Let Conda manage pip itself to avoid pip/Conda state drift in base.
+  conda install -n base -y pip
+
+  # Install notebook tooling from conda-forge; nb_conda_kernels is not reliably available on pip.
+  conda install -n base -y -c conda-forge jupyterlab nb_conda_kernels
 
   # Any future conda env created by this user gets ipykernel by default.
   conda config --add create_default_packages ipykernel >/dev/null 2>&1 || true
@@ -529,3 +531,4 @@ elif [[ "$VERIFY_ONLY" -eq 1 ]]; then
 elif [[ "$RUNBOOK_ONLY" -eq 1 ]]; then
   do_runbook
 fi
+ 
