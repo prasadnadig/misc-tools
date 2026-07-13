@@ -86,7 +86,8 @@ f5-tts_infer-cli \
   --ref_audio "ref.wav" \
   --ref_text "$(cat ref.txt)" \
   --gen_text "Case number 2026-0710. The court acknowledges the submission of all festival schedules and accessibility documents." \
-  --out_path "festival_court_01_cloned.wav"
+  --output_dir "." \
+  --output_file "festival_court_01_cloned.wav"
 ```
 
 Generate from text file content:
@@ -99,7 +100,8 @@ f5-tts_infer-cli \
   --ref_audio "ref.wav" \
   --ref_text "$(cat ref.txt)" \
   --gen_text "$GEN_TEXT" \
-  --out_path "festival_court_01_cloned.wav"
+  --output_dir "." \
+  --output_file "festival_court_01_cloned.wav"
 ```
 
 ## 5) Batch conversion for multiple scripts
@@ -116,7 +118,8 @@ for f in festival_texts/*.txt; do
     --ref_audio "ref.wav" \
     --ref_text "$(cat ref.txt)" \
     --gen_text "$GEN_TEXT" \
-    --out_path "audio_out/${base}.wav"
+    --output_dir "audio_out" \
+    --output_file "${base}.wav"
 
   ffmpeg -i "audio_out/${base}.wav" -codec:a libmp3lame -qscale:a 2 "audio_out/${base}.mp3"
 done
